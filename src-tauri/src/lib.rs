@@ -1,3 +1,4 @@
+#[cfg(feature = "gui")]
 pub mod commands;
 pub mod engines;
 pub mod error;
@@ -8,6 +9,7 @@ pub mod project;
 pub mod reconstruction;
 pub mod video;
 
+#[cfg(feature = "gui")]
 pub fn run_app() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())

@@ -10,16 +10,23 @@ default-run = "ooo-splat"
 name = "ooo_splat"
 crate-type = ["lib", "cdylib", "staticlib"]
 
+[features]
+default = ["gui"]
+# The desktop shell. Turning it off builds the splatstudio CLI and the entire
+# pipeline without pulling in Tauri or the GUI system libraries it links against.
+gui = ["dep:tauri", "dep:tauri-build", "dep:tauri-plugin-dialog", "dep:tauri-plugin-opener"]
+
 [[bin]]
 name = "ooo-splat"
 path = "src/main.rs"
+required-features = ["gui"]
 
 [[bin]]
 name = "splatstudio"
 path = "src/bin/splatstudio.rs"
 
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+tauri-build = { version = "2", features = [], optional = true }
 
 [dependencies]
 chrono = { version = "0.4", features = ["serde"] }
@@ -27,11 +34,11 @@ clap = { version = "4.5", features = ["derive"] }
 dirs = "6"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tauri = { version = "2", features = [] }
-tauri-plugin-dialog = "2"
+tauri = { version = "2", features = [], optional = true }
+tauri-plugin-dialog = { version = "2", optional = true }
 thiserror = "2"
 tokio = { version = "1", features = ["fs", "io-util", "macros", "process", "rt-multi-thread", "sync", "time"] }
-tauri-plugin-opener = "2"
+tauri-plugin-opener = { version = "2", optional = true }
 tokio-util = "0.7"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
