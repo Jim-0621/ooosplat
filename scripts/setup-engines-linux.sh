@@ -165,10 +165,13 @@ setup_colmap() {
   # No libceres-dev here on purpose: setup_ceres installs a newer Ceres into
   # /usr/local, and pulling the distribution package in as well only invites
   # CMake to resolve against the older one.
+  # COLMAP 3.12 moved image IO from FreeImage to OpenImageIO. Both are listed
+  # so COLMAP_TAG can be rolled back to a 3.11 release without editing this.
   require_build_tools
   apt_install \
     libboost-program-options-dev libboost-graph-dev libboost-system-dev \
     libeigen3-dev libflann-dev libfreeimage-dev libmetis-dev \
+    libopenimageio-dev \
     libgoogle-glog-dev libgtest-dev libsqlite3-dev libglew-dev \
     qtbase5-dev libqt5opengl5-dev libcgal-dev \
     libcurl4-openssl-dev
