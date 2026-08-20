@@ -1,5 +1,7 @@
 export type Quality = "fast" | "balanced" | "high";
-export type EngineKind = "ffmpeg" | "ffprobe" | "colmap" | "brush";
+// "glomap" is only ever produced by the splatstudio CLI's health command; the
+// desktop app's check_engines never returns it.
+export type EngineKind = "ffmpeg" | "ffprobe" | "colmap" | "brush" | "glomap";
 export type RunPhase = "idle" | "analyzing" | "running" | "completed" | "failed" | "cancelled";
 export type ProjectStatus = "running" | "completed" | "failed" | "cancelled" | "interrupted";
 

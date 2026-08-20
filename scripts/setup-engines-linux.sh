@@ -5,6 +5,7 @@
 #
 #   engines/ffmpeg/ffmpeg      engines/ffmpeg/ffprobe
 #   engines/colmap/bin/colmap  engines/brush/brush_app
+#   engines/glomap/bin/glomap  (optional, --mapper glomap)
 #
 # This is deliberately not a port of setup-engines.ps1. That script restores
 # pinned archives verified against manifest.json, which works on Windows
@@ -13,8 +14,9 @@
 # toolkit, so COLMAP and Brush are built from source instead.
 #
 # Usage:
-#   ./scripts/setup-engines-linux.sh            # everything
+#   ./scripts/setup-engines-linux.sh            # ffmpeg, colmap, brush
 #   ./scripts/setup-engines-linux.sh colmap     # one component
+#   ./scripts/setup-engines-linux.sh glomap     # optional mapper backend
 #   SKIP_APT=1 ./scripts/setup-engines-linux.sh # no package installs
 #
 set -euo pipefail
@@ -133,6 +135,31 @@ setup_brush() {
   "$ENGINES/brush/brush_app" --help | head -3
 }
 
+setup_glomap() {
+  log "GLOMAP (optional mapper backend)"
+  # GLOMAP links against the COLMAP libraries, so that has to exist first.
+  [ -x "$ENGINES/colmap/bin/colmap" ] || die "build COLMAP first: $0 colmap"
+
+  local src="$CACHE/glomap"
+  if [ -d "$src/.git" ]; then
+    git -C "$src" fetch --tags --quiet
+  else
+    git clone --quiet https://github.com/colmap/glomap.git "$src"
+  fi
+  # Unpinned by default: pin GLOMAP_TAG once a revision is known good on your
+  # footage, the same way COLMAP_TAG and BRUSH_TAG are pinned above.
+  [ -n "${GLOMAP_TAG:-}" ] && git -C "$src" checkout --quiet "$GLOMAP_TAG"
+
+  cmake -S "$src" -B "$src/build" -GNinja \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_PREFIX_PATH="$ENGINES/colmap" \
+    -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCH:-native}" \
+    -DCMAKE_INSTALL_PREFIX="$ENGINES/glomap"
+  cmake --build "$src/build" --target install
+
+  "$ENGINES/glomap/bin/glomap" mapper -h 2>&1 | head -3
+}
+
 record_hashes() {
   log "Recorded hashes"
   # The Windows flow pins these in manifest.json before packaging. Here the
@@ -140,11 +167,14 @@ record_hashes() {
   # after any rebuild to see whether an engine actually changed.
   ( cd "$ROOT" && sha256sum \
       engines/colmap/bin/colmap \
-      engines/brush/brush_app 2>/dev/null ) || true
+      engines/brush/brush_app \
+      engines/glomap/bin/glomap 2>/dev/null ) || true
 }
 
 main() {
   local targets=("$@")
+  # GLOMAP is not in the default set: it is optional, and building it means
+  # building COLMAP first.
   [ ${#targets[@]} -eq 0 ] && targets=(ffmpeg colmap brush)
   preflight
   for target in "${targets[@]}"; do
@@ -152,7 +182,8 @@ main() {
       ffmpeg) setup_ffmpeg ;;
       colmap) setup_colmap ;;
       brush)  setup_brush  ;;
-      *) die "unknown component: $target (expected ffmpeg, colmap or brush)" ;;
+      glomap) setup_glomap ;;
+      *) die "unknown component: $target (expected ffmpeg, colmap, brush or glomap)" ;;
     esac
   done
   record_hashes

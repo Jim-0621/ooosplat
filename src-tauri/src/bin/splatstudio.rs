@@ -2,7 +2,10 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use ooo_splat::{
-    engines::{ffmpeg::extract_uniform_frames, ffprobe::probe_video, ComputePolicy},
+    engines::{
+        ffmpeg::extract_uniform_frames, ffprobe::probe_video, health::check_glomap, ComputePolicy,
+        MapperBackend,
+    },
     error::{Result, SplatError},
     pipeline::runner::{default_engine_paths, PipelineRunner},
     presets::Quality,
@@ -20,6 +23,11 @@ struct Cli {
     /// "gpu" requires a CUDA build and moves extraction and matching onto it.
     #[arg(long, global = true, value_enum, default_value_t = ComputePolicy::Cpu)]
     compute: ComputePolicy,
+    /// Which engine solves camera poses. "colmap" is the bundled incremental
+    /// mapper; "glomap" solves globally and is usually much faster on large
+    /// image sets. Both are CPU bound.
+    #[arg(long, global = true, value_enum, default_value_t = MapperBackend::Colmap)]
+    mapper: MapperBackend,
     #[command(subcommand)]
     command: Commands,
 }
@@ -69,12 +77,15 @@ async fn main() {
 async fn execute(cli: Cli) -> Result<()> {
     let engines = default_engine_paths(cli.engine_dir);
     let compute = cli.compute;
+    let mapper = cli.mapper;
     match cli.command {
         Commands::Health => {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&engines.check_all().await)?
-            );
+            // check_all omits GLOMAP on purpose: the desktop app disables the
+            // start button for any engine it reports as unhealthy, and GLOMAP
+            // is optional. The CLI has no such constraint, so report it here.
+            let mut statuses = engines.check_all().await;
+            statuses.push(check_glomap(&engines.glomap).await);
+            println!("{}", serde_json::to_string_pretty(&statuses)?);
         }
         Commands::Probe { input } => {
             let video = probe_video(&engines.ffprobe, &input, None).await?;
@@ -117,7 +128,8 @@ async fn execute(cli: Cli) -> Result<()> {
                     event.progress, event.stage, event.message
                 );
             })
-            .with_compute_policy(compute);
+            .with_compute_policy(compute)
+            .with_mapper_backend(mapper);
             let result = match projects_root {
                 Some(root) => {
                     runner

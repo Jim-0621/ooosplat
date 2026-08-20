@@ -12,8 +12,8 @@ use serde::Serialize;
 
 use crate::{
     engines::{
-        self, brush, colmap, ffmpeg::extract_uniform_frames, ffprobe::probe_video, ComputePolicy,
-        EngineKind, EnginePaths,
+        self, brush, colmap, ffmpeg::extract_uniform_frames, ffprobe::probe_video, glomap,
+        ComputePolicy, EngineKind, EnginePaths, MapperBackend,
     },
     error::{Result, SplatError},
     pipeline::{
@@ -125,6 +125,7 @@ impl EventSink {
 pub struct PipelineRunner {
     engines: EnginePaths,
     policy: ComputePolicy,
+    mapper: MapperBackend,
     process_manager: ProcessManager,
     events: EventSink,
 }
@@ -134,6 +135,7 @@ impl PipelineRunner {
         Self {
             engines,
             policy: ComputePolicy::default(),
+            mapper: MapperBackend::default(),
             process_manager: ProcessManager::new(),
             events: EventSink {
                 emit: Arc::new(emit),
@@ -148,6 +150,13 @@ impl PipelineRunner {
     /// CPU/no-CUDA policy the bundled Windows engines are verified against.
     pub fn with_compute_policy(mut self, policy: ComputePolicy) -> Self {
         self.policy = policy;
+        self
+    }
+
+    /// Swap the incremental COLMAP mapper for GLOMAP's global solver. Callers
+    /// that never set this keep the bundled COLMAP behaviour.
+    pub fn with_mapper_backend(mut self, mapper: MapperBackend) -> Self {
+        self.mapper = mapper;
         self
     }
 
@@ -178,6 +187,7 @@ impl PipelineRunner {
             }
         }
         engines::health::require_colmap_policy(&self.engines, self.policy).await?;
+        engines::health::require_mapper_backend(&self.engines, self.mapper).await?;
         colmap::require_verified_cli(&self.engines.colmap)?;
         brush::require_verified_cli(&self.engines.brush)
     }
@@ -396,28 +406,59 @@ impl PipelineRunner {
         self.events
             .stage(PipelineStage::Matching, 1.0, "顺序匹配完成");
 
-        self.events
-            .stage(PipelineStage::Reconstructing, 0.0, "正在增量重建相机轨迹");
-        colmap::map(
-            &self.engines.colmap,
-            &database,
-            colmap_images,
-            &sparse,
-            colmap_log,
-            &self.process_manager,
-            Some(self.process_observer(
-                PipelineStage::Reconstructing,
-                PipelineEngine::Colmap,
-                Some(prepared.extracted_frames),
-                ObserverMode::Mapper,
-            )),
-        )
-        .await?;
+        self.events.stage(
+            PipelineStage::Reconstructing,
+            0.0,
+            match self.mapper {
+                MapperBackend::Colmap => "COLMAP 正在增量重建相机轨迹",
+                MapperBackend::Glomap => "GLOMAP 正在全局求解相机位姿",
+            },
+        );
+        // Both backends report as PipelineEngine::Colmap: they occupy the same
+        // stage, and the UI already knows how to render that engine.
+        let mapper_observer = self.process_observer(
+            PipelineStage::Reconstructing,
+            PipelineEngine::Colmap,
+            Some(prepared.extracted_frames),
+            match self.mapper {
+                MapperBackend::Colmap => ObserverMode::Mapper,
+                MapperBackend::Glomap => ObserverMode::Glomap,
+            },
+        );
+        match self.mapper {
+            MapperBackend::Colmap => {
+                colmap::map(
+                    &self.engines.colmap,
+                    &database,
+                    colmap_images,
+                    &sparse,
+                    colmap_log,
+                    &self.process_manager,
+                    Some(mapper_observer),
+                )
+                .await?
+            }
+            MapperBackend::Glomap => {
+                glomap::map(
+                    &self.engines.glomap,
+                    &database,
+                    colmap_images,
+                    &sparse,
+                    paths.logs.join("glomap.log"),
+                    &self.process_manager,
+                    Some(mapper_observer),
+                )
+                .await?
+            }
+        }
         state.stage = PipelineStage::Reconstructing;
         state.reconstruction_complete = true;
         project_manager.write_state(&paths.state, &state).await?;
-        self.events
-            .stage(PipelineStage::Reconstructing, 1.0, "增量重建完成");
+        self.events.stage(
+            PipelineStage::Reconstructing,
+            1.0,
+            format!("{} 重建完成", self.mapper.label()),
+        );
 
         self.events.stage(
             PipelineStage::ValidatingReconstruction,
@@ -561,18 +602,29 @@ impl PipelineRunner {
                 expected_total,
                 None,
             ),
-            ProcessUpdate::Heartbeat { elapsed_ms } if mode == ObserverMode::Brush => events.send(
-                stage,
-                Some(engine),
-                EventKind::Heartbeat,
-                EventLevel::Info,
-                None,
-                true,
-                format!("Brush 正在运行 · 已用时 {}", format_duration(elapsed_ms)),
-                None,
-                expected_total,
-                Some("iterations"),
-            ),
+            ProcessUpdate::Heartbeat { elapsed_ms }
+                if matches!(mode, ObserverMode::Brush | ObserverMode::Glomap) =>
+            {
+                // GLOMAP solves every camera at once, so unlike the incremental
+                // mapper there is no running registration count to report --
+                // only that the process is still alive.
+                let (name, unit) = match mode {
+                    ObserverMode::Brush => ("Brush", Some("iterations")),
+                    _ => ("GLOMAP", None),
+                };
+                events.send(
+                    stage,
+                    Some(engine),
+                    EventKind::Heartbeat,
+                    EventLevel::Info,
+                    None,
+                    true,
+                    format!("{name} 正在运行 · 已用时 {}", format_duration(elapsed_ms)),
+                    None,
+                    expected_total,
+                    unit,
+                )
+            }
             ProcessUpdate::Heartbeat { .. } => {}
             ProcessUpdate::Line { stream: _, line } => {
                 if line.is_empty() {
@@ -594,7 +646,7 @@ impl PipelineRunner {
                     ObserverMode::Mapper => {
                         parse_mapper_progress(&line, &mapper_count, expected_total)
                     }
-                    ObserverMode::Brush => None,
+                    ObserverMode::Brush | ObserverMode::Glomap => None,
                 };
                 if let Some((current, total, message)) = parsed {
                     let progress = total
@@ -637,6 +689,7 @@ enum ObserverMode {
     BracketProgress,
     Mapper,
     Brush,
+    Glomap,
 }
 
 fn parse_ffmpeg_frame(line: &str) -> Option<u64> {
@@ -712,12 +765,19 @@ fn format_duration(milliseconds: u64) -> String {
 }
 
 fn best_sparse_model(frames: &Path, sparse: &Path) -> Result<(PathBuf, ReconstructionReport)> {
-    let mut best: Option<(PathBuf, ReconstructionReport)> = None;
+    // COLMAP splits disconnected reconstructions across sparse/0, sparse/1 and
+    // so on. GLOMAP produces a single model, and writing it straight into the
+    // output directory is a layout the incremental mapper never produces, so
+    // treat the root itself as a candidate too.
+    let mut candidates = vec![sparse.to_path_buf()];
     for entry in std::fs::read_dir(sparse)? {
         let path = entry?.path();
-        if !path.is_dir() {
-            continue;
+        if path.is_dir() {
+            candidates.push(path);
         }
+    }
+    let mut best: Option<(PathBuf, ReconstructionReport)> = None;
+    for path in candidates {
         if let Ok(report) = ReconstructionValidator::validate(frames, &path) {
             if best
                 .as_ref()
@@ -727,7 +787,7 @@ fn best_sparse_model(frames: &Path, sparse: &Path) -> Result<(PathBuf, Reconstru
             }
         }
     }
-    best.ok_or_else(|| SplatError::Process("COLMAP 未生成完整的稀疏模型".into()))
+    best.ok_or_else(|| SplatError::Process("重建未产出完整的稀疏模型".into()))
 }
 
 async fn prepare_brush_dataset(root: &Path, frames: &Path, model: &Path) -> Result<PathBuf> {

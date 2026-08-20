@@ -59,6 +59,45 @@ impl std::fmt::Display for ComputePolicy {
     }
 }
 
+/// Which engine turns the match graph into camera poses and a sparse model.
+///
+/// COLMAP's mapper is incremental: it registers one image at a time and
+/// re-runs bundle adjustment over a model that keeps growing, which is what
+/// makes it the longest stage of a run. GLOMAP is global -- rotation
+/// averaging, then global positioning, then a single bundle adjustment -- so
+/// the expensive step runs once instead of repeatedly. Both are CPU bound;
+/// the win is algorithmic, not hardware.
+///
+/// They read the same database and write the same cameras/images/points3D
+/// files, so validation and the Brush dataset step are unaffected.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum MapperBackend {
+    #[default]
+    Colmap,
+    Glomap,
+}
+
+impl MapperBackend {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Colmap => "COLMAP",
+            Self::Glomap => "GLOMAP",
+        }
+    }
+}
+
+impl std::fmt::Display for MapperBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Colmap => "colmap",
+            Self::Glomap => "glomap",
+        })
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum EngineKind {
@@ -66,6 +105,10 @@ pub enum EngineKind {
     Ffprobe,
     Colmap,
     Brush,
+    /// Optional. Never reported by check_all -- the desktop app disables the
+    /// start button when any returned engine is unhealthy, and GLOMAP is not
+    /// part of the bundled set.
+    Glomap,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -87,6 +130,8 @@ pub struct EnginePaths {
     pub ffprobe: PathBuf,
     pub colmap: PathBuf,
     pub brush: PathBuf,
+    /// Only present when the GLOMAP mapper backend was provisioned.
+    pub glomap: PathBuf,
 }
 
 /// Bundled engines keep the same layout on every platform; only the
@@ -103,6 +148,7 @@ impl EnginePaths {
             ffprobe: root.join("ffmpeg").join(executable("ffprobe")),
             colmap: root.join("colmap").join("bin").join(executable("colmap")),
             brush: root.join("brush").join(executable("brush_app")),
+            glomap: root.join("glomap").join("bin").join(executable("glomap")),
             root,
         }
     }
@@ -318,9 +364,51 @@ pub async fn require_colmap_policy(paths: &EnginePaths, policy: ComputePolicy) -
     }))
 }
 
+/// Deliberately separate from check_all: GLOMAP is optional, and the desktop
+/// app disables the start button whenever any engine check_all returns is
+/// unhealthy. Only callers that selected the backend should ask for this.
+pub async fn check_glomap(path: &Path) -> EngineStatus {
+    check_basic(EngineKind::Glomap, path, &["mapper", "-h"]).await
+}
+
+pub async fn require_mapper_backend(paths: &EnginePaths, backend: MapperBackend) -> Result<()> {
+    match backend {
+        // Already covered by the four bundled engines.
+        MapperBackend::Colmap => Ok(()),
+        MapperBackend::Glomap => {
+            let status = check_glomap(&paths.glomap).await;
+            if status.can_start {
+                Ok(())
+            } else if status.exists {
+                Err(SplatError::EngineStart {
+                    engine: "GLOMAP".into(),
+                    detail: status.detail,
+                })
+            } else {
+                Err(SplatError::EngineMissing(status.path.display().to_string()))
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn colmap_stays_the_default_mapper() {
+        assert_eq!(MapperBackend::default(), MapperBackend::Colmap);
+    }
+
+    #[test]
+    fn glomap_sits_beside_colmap_in_the_engine_layout() {
+        let paths = EnginePaths::from_root("engines");
+        assert_eq!(
+            paths.glomap.file_name().and_then(|name| name.to_str()),
+            Some(format!("glomap{EXE_SUFFIX}").as_str())
+        );
+        assert!(paths.glomap.parent().unwrap().ends_with("bin"));
+    }
 
     #[test]
     fn engine_paths_use_the_platform_executable_extension() {
