@@ -41,6 +41,9 @@ set -euo pipefail
 # and the Rust code passes the 4.x names.
 COLMAP_TAG="${COLMAP_TAG:-4.0.4}"
 BRUSH_TAG="${BRUSH_TAG:-v0.3.0}"
+# Ubuntu 22.04 packages Ceres 2.0, which is older than COLMAP 4.x and GLOMAP
+# accept. Building it is cheap next to COLMAP itself.
+CERES_TAG="${CERES_TAG:-2.2.0}"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENGINES="$ROOT/engines"
@@ -55,19 +58,32 @@ log()  { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 warn() { printf '\033[33mwarning: %s\033[0m\n' "$*" >&2; }
 die()  { printf '\033[31merror: %s\033[0m\n' "$*" >&2; exit 1; }
 
+# Container images often run as root with no sudo installed at all.
+SUDO=""
+[ "$(id -u)" -ne 0 ] && SUDO="sudo"
+
 apt_install() {
   if [ "${SKIP_APT:-0}" = "1" ]; then
     warn "SKIP_APT=1, assuming these are present: $*"
     return
   fi
-  sudo apt-get install -y --no-install-recommends "$@"
+  $SUDO apt-get install -y --no-install-recommends "$@"
 }
 
 preflight() {
   log "Preflight"
   command -v git   >/dev/null || die "git is required"
   command -v cmake >/dev/null || apt_install cmake
-  [ "${SKIP_APT:-0}" = "1" ] || sudo apt-get update
+  [ "${SKIP_APT:-0}" = "1" ] || $SUDO apt-get update
+
+  # CMAKE_CUDA_ARCHITECTURES=native needs 3.24. Older CMake still works, but
+  # only when CUDA_ARCH names the card explicitly (8.6 for Ampere GA102).
+  local cmake_version
+  cmake_version="$(cmake --version | head -1 | awk '{print $3}')"
+  if [ "${CUDA_ARCH:-native}" = "native" ] &&
+     [ "$(printf '%s\n3.24.0\n' "$cmake_version" | sort -V | head -1)" != "3.24.0" ]; then
+    die "cmake $cmake_version cannot resolve CUDA_ARCH=native; pass CUDA_ARCH=8.6"
+  fi
 
   if ! command -v nvidia-smi >/dev/null; then
     warn "nvidia-smi not found. COLMAP will still build, but --compute gpu"
@@ -99,15 +115,46 @@ setup_ffmpeg() {
   "$ENGINES/ffmpeg/ffmpeg" -version | head -1
 }
 
+setup_ceres() {
+  log "Ceres Solver ${CERES_TAG}"
+  # Installed to /usr/local so it lands on the default library search path and
+  # nothing downstream needs RPATH handling. Distribution packages of Eigen and
+  # glog are fine; only Ceres itself is too old.
+  apt_install libeigen3-dev libgoogle-glog-dev libgflags-dev libsuitesparse-dev
+
+  local src="$CACHE/ceres"
+  if [ -d "$src/.git" ]; then
+    git -C "$src" fetch --tags --quiet
+  else
+    git clone --quiet https://github.com/ceres-solver/ceres-solver.git "$src"
+  fi
+  git -C "$src" checkout --quiet "$CERES_TAG"
+  [ "${CLEAN:-0}" = "1" ] && rm -rf "$src/build"
+
+  cmake -S "$src" -B "$src/build" -GNinja \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DBUILD_TESTING=OFF \
+    -DBUILD_EXAMPLES=OFF \
+    -DBUILD_BENCHMARKS=OFF \
+    -DCMAKE_INSTALL_PREFIX=/usr/local
+  cmake --build "$src/build" --target install
+  $SUDO ldconfig
+}
+
 setup_colmap() {
   log "COLMAP ${COLMAP_TAG} (CUDA)"
+  # No libceres-dev here on purpose: setup_ceres installs a newer Ceres into
+  # /usr/local, and pulling the distribution package in as well only invites
+  # CMake to resolve against the older one.
   apt_install \
     build-essential ninja-build \
     libboost-program-options-dev libboost-graph-dev libboost-system-dev \
     libeigen3-dev libflann-dev libfreeimage-dev libmetis-dev \
     libgoogle-glog-dev libgtest-dev libsqlite3-dev libglew-dev \
-    qtbase5-dev libqt5opengl5-dev libcgal-dev libceres-dev \
+    qtbase5-dev libqt5opengl5-dev libcgal-dev \
     libcurl4-openssl-dev
+  [ -f /usr/local/lib/cmake/Ceres/CeresConfig.cmake ] ||
+    die "Ceres not installed yet: run '$0 ceres' first"
 
   local src="$CACHE/colmap"
   if [ -d "$src/.git" ]; then
@@ -195,15 +242,16 @@ main() {
   local targets=("$@")
   # GLOMAP is not in the default set: it is optional, and building it means
   # building COLMAP first.
-  [ ${#targets[@]} -eq 0 ] && targets=(ffmpeg colmap brush)
+  [ ${#targets[@]} -eq 0 ] && targets=(ffmpeg ceres colmap brush)
   preflight
   for target in "${targets[@]}"; do
     case "$target" in
       ffmpeg) setup_ffmpeg ;;
+      ceres)  setup_ceres  ;;
       colmap) setup_colmap ;;
       brush)  setup_brush  ;;
       glomap) setup_glomap ;;
-      *) die "unknown component: $target (expected ffmpeg, colmap, brush or glomap)" ;;
+      *) die "unknown component: $target (expected ffmpeg, ceres, colmap, brush or glomap)" ;;
     esac
   done
   record_hashes
