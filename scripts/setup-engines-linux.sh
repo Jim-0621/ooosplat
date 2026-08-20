@@ -167,11 +167,14 @@ setup_colmap() {
   # CMake to resolve against the older one.
   # COLMAP 3.12 moved image IO from FreeImage to OpenImageIO. Both are listed
   # so COLMAP_TAG can be rolled back to a 3.11 release without editing this.
+  # openimageio-tools looks redundant next to the -dev package but is not: the
+  # -dev CMake targets point at /usr/bin/oiiotool and friends, which ship in
+  # the tools package that --no-install-recommends would otherwise skip.
   require_build_tools
   apt_install \
     libboost-program-options-dev libboost-graph-dev libboost-system-dev \
     libeigen3-dev libflann-dev libfreeimage-dev libmetis-dev \
-    libopenimageio-dev \
+    libopenimageio-dev openimageio-tools \
     libgoogle-glog-dev libgtest-dev libsqlite3-dev libglew-dev \
     qtbase5-dev libqt5opengl5-dev libcgal-dev \
     libcurl4-openssl-dev
