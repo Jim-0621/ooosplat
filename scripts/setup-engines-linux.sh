@@ -189,6 +189,9 @@ setup_colmap() {
   local src="$CACHE/colmap"
   sync_source "$src" https://github.com/colmap/colmap.git "$COLMAP_TAG"
   [ "${CLEAN:-0}" = "1" ] && rm -rf "$src/build"
+  # COLMAP 4.x downloads an ONNX Runtime binary during configure, so this step
+  # needs GitHub reachable. Behind AutoDL's accelerator that means running
+  # SKIP_APT=1 with the proxy on, since apt and GitHub want opposite settings.
 
   # CMAKE_CUDA_ARCHITECTURES=native compiles only for the GPU in this machine,
   # which keeps the build short. Use "all-major" instead if the binary has to
