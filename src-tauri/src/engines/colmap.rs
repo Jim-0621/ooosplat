@@ -4,6 +4,7 @@ use std::{
 };
 
 use crate::{
+    engines::ComputePolicy,
     error::{Result, SplatError},
     process::{ProcessManager, ProcessObserver, ProcessSpec},
 };
@@ -47,6 +48,7 @@ pub async fn extract_features(
     executable: &Path,
     database: &Path,
     images: &Path,
+    policy: ComputePolicy,
     log: PathBuf,
     manager: &ProcessManager,
     observer: Option<ProcessObserver>,
@@ -64,7 +66,7 @@ pub async fn extract_features(
             "--ImageReader.single_camera".into(),
             "1".into(),
             "--FeatureExtraction.use_gpu".into(),
-            "0".into(),
+            policy.colmap_use_gpu().into(),
         ],
         database.parent().unwrap_or(images),
         log,
@@ -77,6 +79,7 @@ pub async fn extract_features(
 pub async fn match_sequential(
     executable: &Path,
     database: &Path,
+    policy: ComputePolicy,
     log: PathBuf,
     manager: &ProcessManager,
     observer: Option<ProcessObserver>,
@@ -88,7 +91,7 @@ pub async fn match_sequential(
             "--database_path".into(),
             database.into(),
             "--FeatureMatching.use_gpu".into(),
-            "0".into(),
+            policy.colmap_use_gpu().into(),
             "--SequentialMatching.overlap".into(),
             "10".into(),
         ],
@@ -131,11 +134,17 @@ pub async fn map(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
-    fn fixed_arguments_force_cpu_colmap() {
-        let feature = ["--FeatureExtraction.use_gpu", "0"];
-        let matching = ["--FeatureMatching.use_gpu", "0"];
-        assert_eq!(feature[1], "0");
-        assert_eq!(matching[1], "0");
+    fn compute_policy_drives_the_colmap_gpu_switches() {
+        assert_eq!(ComputePolicy::Cpu.colmap_use_gpu(), "0");
+        assert_eq!(ComputePolicy::Gpu.colmap_use_gpu(), "1");
+    }
+
+    #[test]
+    fn cpu_stays_the_default_policy() {
+        assert_eq!(ComputePolicy::default(), ComputePolicy::Cpu);
+        assert!(!ComputePolicy::default().uses_gpu());
     }
 }

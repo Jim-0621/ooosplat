@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use ooo_splat::{
-    engines::{ffmpeg::extract_uniform_frames, ffprobe::probe_video},
+    engines::{ffmpeg::extract_uniform_frames, ffprobe::probe_video, ComputePolicy},
     error::{Result, SplatError},
     pipeline::runner::{default_engine_paths, PipelineRunner},
     presets::Quality,
@@ -16,6 +16,10 @@ struct Cli {
     /// Override the bundled engine directory (also supports OOOSPLAT_ENGINE_DIR).
     #[arg(long, global = true)]
     engine_dir: Option<PathBuf>,
+    /// Which COLMAP build to drive. "cpu" keeps the bundled no-CUDA policy;
+    /// "gpu" requires a CUDA build and moves extraction and matching onto it.
+    #[arg(long, global = true, value_enum, default_value_t = ComputePolicy::Cpu)]
+    compute: ComputePolicy,
     #[command(subcommand)]
     command: Commands,
 }
@@ -64,6 +68,7 @@ async fn main() {
 
 async fn execute(cli: Cli) -> Result<()> {
     let engines = default_engine_paths(cli.engine_dir);
+    let compute = cli.compute;
     match cli.command {
         Commands::Health => {
             println!(
@@ -111,7 +116,8 @@ async fn execute(cli: Cli) -> Result<()> {
                     "{:>6.2}% {:?}: {}",
                     event.progress, event.stage, event.message
                 );
-            });
+            })
+            .with_compute_policy(compute);
             let result = match projects_root {
                 Some(root) => {
                     runner

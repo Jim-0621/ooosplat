@@ -12,8 +12,8 @@ use serde::Serialize;
 
 use crate::{
     engines::{
-        self, brush, colmap, ffmpeg::extract_uniform_frames, ffprobe::probe_video, EngineKind,
-        EnginePaths,
+        self, brush, colmap, ffmpeg::extract_uniform_frames, ffprobe::probe_video, ComputePolicy,
+        EngineKind, EnginePaths,
     },
     error::{Result, SplatError},
     pipeline::{
@@ -124,6 +124,7 @@ impl EventSink {
 
 pub struct PipelineRunner {
     engines: EnginePaths,
+    policy: ComputePolicy,
     process_manager: ProcessManager,
     events: EventSink,
 }
@@ -132,6 +133,7 @@ impl PipelineRunner {
     pub fn new(engines: EnginePaths, emit: impl Fn(PipelineEvent) + Send + Sync + 'static) -> Self {
         Self {
             engines,
+            policy: ComputePolicy::default(),
             process_manager: ProcessManager::new(),
             events: EventSink {
                 emit: Arc::new(emit),
@@ -140,6 +142,13 @@ impl PipelineRunner {
                 started: Instant::now(),
             },
         }
+    }
+
+    /// Opt into a CUDA COLMAP build. Callers that never set this keep the
+    /// CPU/no-CUDA policy the bundled Windows engines are verified against.
+    pub fn with_compute_policy(mut self, policy: ComputePolicy) -> Self {
+        self.policy = policy;
+        self
     }
 
     pub fn cancel(&self) {
@@ -168,7 +177,7 @@ impl PipelineRunner {
                 });
             }
         }
-        engines::health::require_cpu_colmap(&self.engines).await?;
+        engines::health::require_colmap_policy(&self.engines, self.policy).await?;
         colmap::require_verified_cli(&self.engines.colmap)?;
         brush::require_verified_cli(&self.engines.brush)
     }
@@ -336,12 +345,13 @@ impl PipelineRunner {
         self.events.stage(
             PipelineStage::ExtractingFeatures,
             0.0,
-            "COLMAP 正在使用 CPU 提取特征",
+            format!("COLMAP 正在使用 {} 提取特征", self.policy.label()),
         );
         colmap::extract_features(
             &self.engines.colmap,
             &database,
             colmap_images,
+            self.policy,
             colmap_log.clone(),
             &self.process_manager,
             Some(self.process_observer(
@@ -355,14 +365,21 @@ impl PipelineRunner {
         state.stage = PipelineStage::ExtractingFeatures;
         state.features_complete = true;
         project_manager.write_state(&paths.state, &state).await?;
-        self.events
-            .stage(PipelineStage::ExtractingFeatures, 1.0, "CPU 特征提取完成");
+        self.events.stage(
+            PipelineStage::ExtractingFeatures,
+            1.0,
+            format!("{} 特征提取完成", self.policy.label()),
+        );
 
-        self.events
-            .stage(PipelineStage::Matching, 0.0, "COLMAP 正在进行 CPU 顺序匹配");
+        self.events.stage(
+            PipelineStage::Matching,
+            0.0,
+            format!("COLMAP 正在进行 {} 顺序匹配", self.policy.label()),
+        );
         colmap::match_sequential(
             &self.engines.colmap,
             &database,
+            self.policy,
             colmap_log.clone(),
             &self.process_manager,
             Some(self.process_observer(

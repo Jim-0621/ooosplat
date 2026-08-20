@@ -7,9 +7,57 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    error::Result,
+    error::{Result, SplatError},
     process::{ProcessManager, ProcessSpec},
 };
+
+/// Which COLMAP build the pipeline is allowed to drive.
+///
+/// The Windows product bundles the CPU/no-CUDA release so installs stay
+/// driver independent, and refuses anything carrying a CUDA runtime. A CUDA
+/// build is opt-in and moves feature extraction and matching onto the GPU;
+/// the mapper is incremental and stays CPU bound under either policy.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum ComputePolicy {
+    #[default]
+    Cpu,
+    Gpu,
+}
+
+impl ComputePolicy {
+    pub const fn uses_gpu(self) -> bool {
+        matches!(self, Self::Gpu)
+    }
+
+    /// COLMAP spells its GPU switches as "1"/"0".
+    pub const fn colmap_use_gpu(self) -> &'static str {
+        if self.uses_gpu() {
+            "1"
+        } else {
+            "0"
+        }
+    }
+
+    /// Shown in stage messages so the log says which device actually ran.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Cpu => "CPU",
+            Self::Gpu => "GPU",
+        }
+    }
+}
+
+impl std::fmt::Display for ComputePolicy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Cpu => "cpu",
+            Self::Gpu => "gpu",
+        })
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -237,19 +285,37 @@ fn runtime_contains_cuda(directory: &Path) -> bool {
             return runtime_contains_cuda(&path);
         }
         let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
-        ["cudart", "cublas", "cudnn", "cuda.dll"]
+        ["cudart", "cublas", "cudnn", "cuda.dll", "libcuda.so"]
             .iter()
             .any(|needle| name.contains(needle))
     })
 }
 
-pub async fn require_cpu_colmap(paths: &EnginePaths) -> Result<()> {
+pub async fn require_colmap_policy(paths: &EnginePaths, policy: ComputePolicy) -> Result<()> {
     let status = check_colmap(&paths.colmap).await;
-    if status.cpu_only == Some(true) && status.can_start {
-        Ok(())
-    } else {
-        Err(crate::error::SplatError::UnsupportedEngine(status.detail))
+    if !status.can_start {
+        return Err(SplatError::UnsupportedEngine(status.detail));
     }
+    let satisfied = match policy {
+        // Shipping the no-CUDA release is what keeps Windows installs driver
+        // independent, so a CUDA runtime beside the binary is a hard stop.
+        ComputePolicy::Cpu => status.cpu_only == Some(true),
+        // A build reporting itself as "without CUDA" can never drive the GPU.
+        // Anything else passes: source and distribution builds link CUDA from
+        // the system, not from the engine directory, so absence of CUDA files
+        // next to the binary proves nothing.
+        ComputePolicy::Gpu => status.cpu_only != Some(true),
+    };
+    if satisfied {
+        return Ok(());
+    }
+    let reported = status.version.unwrap_or(status.detail);
+    Err(SplatError::UnsupportedEngine(match policy {
+        ComputePolicy::Cpu => format!("需要 CPU/no-CUDA 构建的 COLMAP：{reported}"),
+        ComputePolicy::Gpu => {
+            format!("COLMAP 自报为 no-CUDA 构建，无法满足 GPU 策略：{reported}")
+        }
+    }))
 }
 
 #[cfg(test)]
