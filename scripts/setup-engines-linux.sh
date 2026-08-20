@@ -18,6 +18,20 @@
 #   ./scripts/setup-engines-linux.sh colmap     # one component
 #   ./scripts/setup-engines-linux.sh glomap     # optional mapper backend
 #   SKIP_APT=1 ./scripts/setup-engines-linux.sh # no package installs
+#   CLEAN=1   ./scripts/setup-engines-linux.sh  # discard cached CMake trees
+#
+# The image's CUDA toolkit can be wrong in either direction. Too new and CCCL
+# 3.0 (CUDA 13) has dropped Thrust/CUB API the sources still use; too old and
+# it cannot emit code for the card at all -- SM 8.6 needs CUDA 11.1 or later,
+# for instance. Either way the fix is another toolkit rather than another
+# machine, because the driver is backward compatible:
+#
+#   apt-get install -y cuda-toolkit-12-4
+#   export CUDACXX=/usr/local/cuda-12.4/bin/nvcc
+#   CLEAN=1 CUDA_ARCH=8.6 ./scripts/setup-engines-linux.sh colmap
+#
+# CLEAN=1 matters there: CMake caches the compiler it configured with, so a
+# changed CUDACXX is ignored until the build tree is discarded.
 #
 set -euo pipefail
 
@@ -30,7 +44,11 @@ BRUSH_TAG="${BRUSH_TAG:-v0.3.0}"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENGINES="$ROOT/engines"
-CACHE="$ROOT/.cache/engines"
+# Source checkouts and CMake build trees, which are large and only needed while
+# building. Override CACHE to keep them off the disk that holds the installed
+# engines -- on hosts that snapshot one disk but not the other, the finished
+# binaries belong on the snapshotted one and these do not.
+CACHE="${CACHE:-$ROOT/.cache/engines}"
 mkdir -p "$CACHE"
 
 log()  { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
@@ -98,6 +116,7 @@ setup_colmap() {
     git clone --quiet https://github.com/colmap/colmap.git "$src"
   fi
   git -C "$src" checkout --quiet "$COLMAP_TAG"
+  [ "${CLEAN:-0}" = "1" ] && rm -rf "$src/build"
 
   # CMAKE_CUDA_ARCHITECTURES=native compiles only for the GPU in this machine,
   # which keeps the build short. Use "all-major" instead if the binary has to
@@ -149,6 +168,7 @@ setup_glomap() {
   # Unpinned by default: pin GLOMAP_TAG once a revision is known good on your
   # footage, the same way COLMAP_TAG and BRUSH_TAG are pinned above.
   [ -n "${GLOMAP_TAG:-}" ] && git -C "$src" checkout --quiet "$GLOMAP_TAG"
+  [ "${CLEAN:-0}" = "1" ] && rm -rf "$src/build"
 
   cmake -S "$src" -B "$src/build" -GNinja \
     -DCMAKE_BUILD_TYPE=Release \
