@@ -70,6 +70,22 @@ apt_install() {
   $SUDO apt-get install -y --no-install-recommends "$@"
 }
 
+# Clone if absent, and fetch only when the wanted ref is genuinely missing.
+# Re-fetching every run makes the script unusable behind a proxy that has to
+# be switched on for GitHub and off for the distribution mirrors, since the
+# sources are almost always already at the pinned ref.
+sync_source() {
+  local src="$1" url="$2" ref="${3:-}"
+  if [ ! -d "$src/.git" ]; then
+    git clone --quiet "$url" "$src"
+  elif [ -n "$ref" ] &&
+       ! git -C "$src" rev-parse --verify --quiet "${ref}^{commit}" >/dev/null; then
+    git -C "$src" fetch --tags --quiet
+  fi
+  [ -n "$ref" ] && git -C "$src" checkout --quiet "$ref"
+  return 0
+}
+
 preflight() {
   log "Preflight"
   command -v git   >/dev/null || die "git is required"
@@ -123,12 +139,7 @@ setup_ceres() {
   apt_install libeigen3-dev libgoogle-glog-dev libgflags-dev libsuitesparse-dev
 
   local src="$CACHE/ceres"
-  if [ -d "$src/.git" ]; then
-    git -C "$src" fetch --tags --quiet
-  else
-    git clone --quiet https://github.com/ceres-solver/ceres-solver.git "$src"
-  fi
-  git -C "$src" checkout --quiet "$CERES_TAG"
+  sync_source "$src" https://github.com/ceres-solver/ceres-solver.git "$CERES_TAG"
   [ "${CLEAN:-0}" = "1" ] && rm -rf "$src/build"
 
   cmake -S "$src" -B "$src/build" -GNinja \
@@ -157,12 +168,7 @@ setup_colmap() {
     die "Ceres not installed yet: run '$0 ceres' first"
 
   local src="$CACHE/colmap"
-  if [ -d "$src/.git" ]; then
-    git -C "$src" fetch --tags --quiet
-  else
-    git clone --quiet https://github.com/colmap/colmap.git "$src"
-  fi
-  git -C "$src" checkout --quiet "$COLMAP_TAG"
+  sync_source "$src" https://github.com/colmap/colmap.git "$COLMAP_TAG"
   [ "${CLEAN:-0}" = "1" ] && rm -rf "$src/build"
 
   # CMAKE_CUDA_ARCHITECTURES=native compiles only for the GPU in this machine,
@@ -187,12 +193,7 @@ setup_brush() {
   mkdir -p "$ENGINES/brush"
 
   local src="$CACHE/brush"
-  if [ -d "$src/.git" ]; then
-    git -C "$src" fetch --tags --quiet
-  else
-    git clone --quiet https://github.com/ArthurBrussee/brush.git "$src"
-  fi
-  git -C "$src" checkout --quiet "$BRUSH_TAG"
+  sync_source "$src" https://github.com/ArthurBrussee/brush.git "$BRUSH_TAG"
 
   # Brush renders through wgpu, which uses Vulkan on Linux.
   apt_install libvulkan1 vulkan-tools mesa-vulkan-drivers
@@ -207,14 +208,9 @@ setup_glomap() {
   [ -x "$ENGINES/colmap/bin/colmap" ] || die "build COLMAP first: $0 colmap"
 
   local src="$CACHE/glomap"
-  if [ -d "$src/.git" ]; then
-    git -C "$src" fetch --tags --quiet
-  else
-    git clone --quiet https://github.com/colmap/glomap.git "$src"
-  fi
   # Unpinned by default: pin GLOMAP_TAG once a revision is known good on your
   # footage, the same way COLMAP_TAG and BRUSH_TAG are pinned above.
-  [ -n "${GLOMAP_TAG:-}" ] && git -C "$src" checkout --quiet "$GLOMAP_TAG"
+  sync_source "$src" https://github.com/colmap/glomap.git "${GLOMAP_TAG:-}"
   [ "${CLEAN:-0}" = "1" ] && rm -rf "$src/build"
 
   cmake -S "$src" -B "$src/build" -GNinja \
