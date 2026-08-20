@@ -19,6 +19,7 @@
 #   ./scripts/setup-engines-linux.sh glomap     # optional mapper backend
 #   SKIP_APT=1 ./scripts/setup-engines-linux.sh # no package installs
 #   CLEAN=1   ./scripts/setup-engines-linux.sh  # discard cached CMake trees
+#   BUILD_JOBS=4 ./scripts/setup-engines-linux.sh  # cap compiler parallelism
 #
 # The image's CUDA toolkit can be wrong in either direction. Too new and CCCL
 # 3.0 (CUDA 13) has dropped Thrust/CUB API the sources still use; too old and
@@ -75,6 +76,19 @@ apt_install() {
 # Ceres builds first and fails at configure time without them.
 require_build_tools() {
   apt_install build-essential ninja-build
+}
+
+# Ninja and cargo both default to one job per core. The heavy translation
+# units here -- PoissonRecon, bundle adjustment, the CUDA kernels -- take a
+# couple of gigabytes each, so a container with many cores and modest RAM
+# gets cc1plus killed by the OOM killer. Cap the job count by memory too.
+build_jobs() {
+  local cores mem_gb by_mem
+  cores="$(nproc)"
+  mem_gb=$(( $(awk '/MemTotal/{print $2}' /proc/meminfo) / 1024 / 1024 ))
+  by_mem=$(( mem_gb / 2 ))
+  [ "$by_mem" -lt 1 ] && by_mem=1
+  if [ "$by_mem" -lt "$cores" ]; then echo "$by_mem"; else echo "$cores"; fi
 }
 
 # Clone if absent, and fetch only when the wanted ref is genuinely missing.
@@ -161,7 +175,7 @@ setup_ceres() {
     -DBUILD_EXAMPLES=OFF \
     -DBUILD_BENCHMARKS=OFF \
     -DCMAKE_INSTALL_PREFIX=/usr/local
-  cmake --build "$src/build" --target install
+  cmake --build "$src/build" --target install -j "${BUILD_JOBS:-$(build_jobs)}"
   $SUDO ldconfig
 }
 
@@ -202,7 +216,7 @@ setup_colmap() {
     -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCH:-native}" \
     -DGUI_ENABLED=OFF \
     -DCMAKE_INSTALL_PREFIX="$ENGINES/colmap"
-  cmake --build "$src/build" --target install
+  cmake --build "$src/build" --target install -j "${BUILD_JOBS:-$(build_jobs)}"
 
   # health.rs reads this line, and require_colmap_policy rejects the build for
   # --compute gpu if it reports "without CUDA".
@@ -220,7 +234,7 @@ setup_brush() {
   require_build_tools
   # Brush renders through wgpu, which uses Vulkan on Linux.
   apt_install libvulkan1 vulkan-tools mesa-vulkan-drivers
-  ( cd "$src" && cargo build --release --bin brush_app )
+  ( cd "$src" && cargo build --release --bin brush_app -j "${BUILD_JOBS:-$(build_jobs)}" )
   install -m 755 "$src/target/release/brush_app" "$ENGINES/brush/brush_app"
   "$ENGINES/brush/brush_app" --help | head -3
 }
@@ -241,7 +255,7 @@ setup_glomap() {
     -DCMAKE_PREFIX_PATH="$ENGINES/colmap" \
     -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCH:-native}" \
     -DCMAKE_INSTALL_PREFIX="$ENGINES/glomap"
-  cmake --build "$src/build" --target install
+  cmake --build "$src/build" --target install -j "${BUILD_JOBS:-$(build_jobs)}"
 
   "$ENGINES/glomap/bin/glomap" mapper -h 2>&1 | head -3
 }
