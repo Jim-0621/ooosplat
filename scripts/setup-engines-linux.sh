@@ -28,7 +28,7 @@
 #
 #   apt-get install -y cuda-toolkit-12-4
 #   export CUDACXX=/usr/local/cuda-12.4/bin/nvcc
-#   CLEAN=1 CUDA_ARCH=8.6 ./scripts/setup-engines-linux.sh colmap
+#   CLEAN=1 CUDA_ARCH=86 ./scripts/setup-engines-linux.sh colmap
 #
 # CLEAN=1 matters there: CMake caches the compiler it configured with, so a
 # changed CUDACXX is ignored until the build tree is discarded.
@@ -99,13 +99,18 @@ preflight() {
   command -v cmake >/dev/null || apt_install cmake
   [ "${SKIP_APT:-0}" = "1" ] || $SUDO apt-get update
 
+  # CMAKE_CUDA_ARCHITECTURES wants 86, not 8.6. The dotted form parses as 8
+  # and nvcc then dies with "Unsupported gpu architecture 'compute_8'", so
+  # accept the way compute capability is normally written and drop the dot.
+  CUDA_ARCH="$(printf '%s' "${CUDA_ARCH:-native}" | tr -d '.')"
+
   # CMAKE_CUDA_ARCHITECTURES=native needs 3.24. Older CMake still works, but
-  # only when CUDA_ARCH names the card explicitly (8.6 for Ampere GA102).
+  # only when CUDA_ARCH names the card explicitly (86 for Ampere GA102).
   local cmake_version
   cmake_version="$(cmake --version | head -1 | awk '{print $3}')"
-  if [ "${CUDA_ARCH:-native}" = "native" ] &&
+  if [ "$CUDA_ARCH" = "native" ] &&
      [ "$(printf '%s\n3.24.0\n' "$cmake_version" | sort -V | head -1)" != "3.24.0" ]; then
-    die "cmake $cmake_version cannot resolve CUDA_ARCH=native; pass CUDA_ARCH=8.6"
+    die "cmake $cmake_version cannot resolve CUDA_ARCH=native; pass CUDA_ARCH=86"
   fi
 
   if ! command -v nvidia-smi >/dev/null; then
