@@ -70,6 +70,13 @@ apt_install() {
   $SUDO apt-get install -y --no-install-recommends "$@"
 }
 
+# Every source build below drives the Ninja generator, and cargo needs a
+# linker as well. Installing these from setup_colmap alone was a bug, since
+# Ceres builds first and fails at configure time without them.
+require_build_tools() {
+  apt_install build-essential ninja-build
+}
+
 # Clone if absent, and fetch only when the wanted ref is genuinely missing.
 # Re-fetching every run makes the script unusable behind a proxy that has to
 # be switched on for GitHub and off for the distribution mirrors, since the
@@ -136,6 +143,7 @@ setup_ceres() {
   # Installed to /usr/local so it lands on the default library search path and
   # nothing downstream needs RPATH handling. Distribution packages of Eigen and
   # glog are fine; only Ceres itself is too old.
+  require_build_tools
   apt_install libeigen3-dev libgoogle-glog-dev libgflags-dev libsuitesparse-dev
 
   local src="$CACHE/ceres"
@@ -157,8 +165,8 @@ setup_colmap() {
   # No libceres-dev here on purpose: setup_ceres installs a newer Ceres into
   # /usr/local, and pulling the distribution package in as well only invites
   # CMake to resolve against the older one.
+  require_build_tools
   apt_install \
-    build-essential ninja-build \
     libboost-program-options-dev libboost-graph-dev libboost-system-dev \
     libeigen3-dev libflann-dev libfreeimage-dev libmetis-dev \
     libgoogle-glog-dev libgtest-dev libsqlite3-dev libglew-dev \
@@ -195,6 +203,7 @@ setup_brush() {
   local src="$CACHE/brush"
   sync_source "$src" https://github.com/ArthurBrussee/brush.git "$BRUSH_TAG"
 
+  require_build_tools
   # Brush renders through wgpu, which uses Vulkan on Linux.
   apt_install libvulkan1 vulkan-tools mesa-vulkan-drivers
   ( cd "$src" && cargo build --release --bin brush_app )
