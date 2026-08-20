@@ -1,4 +1,5 @@
 use std::{
+    env::consts::EXE_SUFFIX,
     ffi::OsString,
     path::{Path, PathBuf},
 };
@@ -40,14 +41,20 @@ pub struct EnginePaths {
     pub brush: PathBuf,
 }
 
+/// Bundled engines keep the same layout on every platform; only the
+/// executable extension differs (".exe" on Windows, empty elsewhere).
+fn executable(name: &str) -> String {
+    format!("{name}{EXE_SUFFIX}")
+}
+
 impl EnginePaths {
     pub fn from_root(root: impl Into<PathBuf>) -> Self {
         let root = root.into();
         Self {
-            ffmpeg: root.join("ffmpeg").join("ffmpeg.exe"),
-            ffprobe: root.join("ffmpeg").join("ffprobe.exe"),
-            colmap: root.join("colmap").join("bin").join("colmap.exe"),
-            brush: root.join("brush").join("brush_app.exe"),
+            ffmpeg: root.join("ffmpeg").join(executable("ffmpeg")),
+            ffprobe: root.join("ffmpeg").join(executable("ffprobe")),
+            colmap: root.join("colmap").join("bin").join(executable("colmap")),
+            brush: root.join("brush").join(executable("brush_app")),
             root,
         }
     }
@@ -242,5 +249,33 @@ pub async fn require_cpu_colmap(paths: &EnginePaths) -> Result<()> {
         Ok(())
     } else {
         Err(crate::error::SplatError::UnsupportedEngine(status.detail))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn engine_paths_use_the_platform_executable_extension() {
+        let paths = EnginePaths::from_root("engines");
+        for (path, stem) in [
+            (&paths.ffmpeg, "ffmpeg"),
+            (&paths.ffprobe, "ffprobe"),
+            (&paths.colmap, "colmap"),
+            (&paths.brush, "brush_app"),
+        ] {
+            assert_eq!(
+                path.file_name().and_then(|name| name.to_str()),
+                Some(format!("{stem}{EXE_SUFFIX}").as_str())
+            );
+        }
+    }
+
+    #[test]
+    fn engine_layout_is_identical_on_every_platform() {
+        let paths = EnginePaths::from_root("engines");
+        assert!(paths.ffprobe.parent().unwrap().ends_with("ffmpeg"));
+        assert!(paths.colmap.parent().unwrap().ends_with("bin"));
     }
 }

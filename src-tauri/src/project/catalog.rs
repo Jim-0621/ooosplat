@@ -63,8 +63,9 @@ pub struct ProjectOverview {
 
 fn app_data_root() -> Result<PathBuf> {
     dirs::data_local_dir()
+        .or_else(dirs::home_dir)
         .map(|v| v.join("SplatStudio"))
-        .ok_or_else(|| SplatError::Process("无法定位 LOCALAPPDATA 目录".into()))
+        .ok_or_else(|| SplatError::Process("无法定位应用数据目录".into()))
 }
 fn settings_path() -> Result<PathBuf> {
     Ok(app_data_root()?.join("settings.json"))
@@ -72,10 +73,14 @@ fn settings_path() -> Result<PathBuf> {
 fn index_path() -> Result<PathBuf> {
     Ok(app_data_root()?.join("project-index.json"))
 }
+/// Windows always reports a Documents folder. Linux only does when XDG user
+/// directories are configured, which headless servers usually skip, so fall
+/// back to the home directory instead of failing the run.
 pub fn default_projects_root() -> Result<PathBuf> {
     dirs::document_dir()
+        .or_else(dirs::home_dir)
         .map(|v| v.join("SplatStudio").join("Projects"))
-        .ok_or_else(|| SplatError::Process("无法定位 Documents 目录".into()))
+        .ok_or_else(|| SplatError::Process("无法定位用户目录".into()))
 }
 
 pub async fn load_settings() -> Result<AppSettings> {
