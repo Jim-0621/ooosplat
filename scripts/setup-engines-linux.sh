@@ -250,6 +250,10 @@ setup_colmap() {
     -DCMAKE_INSTALL_PREFIX="$ENGINES/colmap"
   cmake --build "$src/build" --target install -j "${BUILD_JOBS:-$(build_jobs)}"
 
+  # Recorded so setup_glomap can refuse to build against a COLMAP whose API it
+  # does not match.
+  printf '%s\n' "$COLMAP_TAG" > "$ENGINES/colmap/.source-ref"
+
   # health.rs reads this line, and require_colmap_policy rejects the build for
   # --compute gpu if it reports "without CUDA".
   "$ENGINES/colmap/bin/colmap" -h 2>&1 | head -1
@@ -294,6 +298,21 @@ setup_glomap() {
   # tree whose database schema need not match the one that wrote the database,
   # which surfaces as "SQLite error: SQL logic error" when the mapper starts.
   [ -x "$ENGINES/colmap/bin/colmap" ] || die "build COLMAP first: $0 colmap"
+  # COLMAP moved Rigid3d::rotation and ::translation from members to accessors
+  # returning Eigen::Map after this commit, and GLOMAP still assigns to them,
+  # so anything newer fails to compile against it. GLOMAP pins the same commit
+  # for its own FetchContent copy.
+  local want_colmap=b6b7b54eca6078070f73a3f0a084f79c629a6f10
+  local have_colmap
+  have_colmap="$(cat "$ENGINES/colmap/.source-ref" 2>/dev/null || true)"
+  # An empty value would turn the pattern below into a match-anything glob.
+  [ -n "$have_colmap" ] || have_colmap=unknown
+  case "$want_colmap" in
+    "$have_colmap"*) ;;
+    *) die "GLOMAP needs COLMAP built from $want_colmap, found '$have_colmap';
+   rebuild it first:
+     CLEAN=1 COLMAP_TAG=$want_colmap $0 colmap" ;;
+  esac
   # CMAKE_FIND_PACKAGE_TARGETS_GLOBAL goes with it: GLOMAP calls
   # find_package(COLMAP) from thirdparty/, and an imported target is scoped to
   # the directory that created it, so glomap/ -- a sibling -- cannot see
