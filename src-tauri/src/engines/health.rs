@@ -293,23 +293,24 @@ async fn check_colmap(path: &Path) -> EngineStatus {
     ]
     .iter()
     .any(|marker| lower.contains(marker));
+    // The bundled Windows engine set ships the CUDA runtime beside the binary.
+    // A source build on Linux links against the system toolkit instead, so
+    // fall back to the banner COLMAP prints for itself.
     let bundled_cuda = path.parent().is_some_and(runtime_contains_cuda);
-    let cpu_only = if bundled_cuda {
-        Some(false)
+    let explicit_cuda = lower.contains("with cuda") || lower.contains("cuda: yes");
+    let (cpu_only, detail) = if bundled_cuda {
+        (Some(false), "运行目录中发现 CUDA 运行时，拒绝将其标记为 CPU 版本")
     } else if explicit_cpu {
-        Some(true)
+        (Some(true), "三个必需命令可启动，帮助输出明确报告无 CUDA")
+    } else if explicit_cuda {
+        (Some(false), "三个必需命令可启动，帮助输出报告为 CUDA 构建")
     } else {
-        None
+        (None, "命令可启动，但帮助输出未明确证明这是 CPU/no-CUDA 构建")
     };
     let first_line = help
         .lines()
         .find(|line| !line.trim().is_empty())
         .map(|line| line.trim().to_owned());
-    let detail = match cpu_only {
-        Some(true) => "三个必需命令可启动，帮助输出明确报告无 CUDA".into(),
-        Some(false) => "运行目录中发现 CUDA 运行时，拒绝将其标记为 CPU 版本".into(),
-        None => "命令可启动，但帮助输出未明确证明这是 CPU/no-CUDA 构建".into(),
-    };
     EngineStatus {
         kind: EngineKind::Colmap,
         path: path.to_path_buf(),
@@ -317,7 +318,7 @@ async fn check_colmap(path: &Path) -> EngineStatus {
         can_start: successful,
         version: first_line,
         cpu_only,
-        detail,
+        detail: detail.into(),
     }
 }
 
