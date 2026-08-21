@@ -162,15 +162,22 @@ setup_ffmpeg() {
   # Not the distribution package: probe_video asks for the stream_side_data
   # section, which ffprobe only grew after 4.4, so Ubuntu 22.04's build exits
   # with "No match for section" on every video. A static build also keeps the
-  # engine at the same major version as the Windows bundle.
-  local url="${FFMPEG_URL:-https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n7.1-latest-linux64-gpl-7.1.tar.xz}"
+  # engine on the option surface the Rust code was written against.
+  local url="${FFMPEG_URL:-https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-linux64-gpl-8.1.tar.xz}"
   local archive="$CACHE/$(basename "$url")"
   mkdir -p "$CACHE"
-  [ -s "$archive" ] || curl -fL --retry 3 -o "$archive" "$url"
+  # Downloaded aside and renamed: a failed transfer left under the real name
+  # would satisfy the -s test and later be unpacked as a truncated archive.
+  [ -s "$archive" ] ||
+    { curl -fL --retry 3 -o "$archive.part" "$url" && mv "$archive.part" "$archive"; }
   local unpacked="$CACHE/ffmpeg-static"
   rm -rf "$unpacked"
   mkdir -p "$unpacked"
   tar -xJf "$archive" -C "$unpacked" --strip-components=1
+  # Earlier revisions symlinked these to /usr/bin. install follows a symlink
+  # destination, so removing them first keeps it from writing over the
+  # distribution binaries.
+  rm -f "$ENGINES/ffmpeg/ffmpeg" "$ENGINES/ffmpeg/ffprobe"
   install -m 755 "$unpacked/bin/ffmpeg"  "$ENGINES/ffmpeg/ffmpeg"
   install -m 755 "$unpacked/bin/ffprobe" "$ENGINES/ffmpeg/ffprobe"
   "$ENGINES/ffmpeg/ffmpeg" -version | head -1
