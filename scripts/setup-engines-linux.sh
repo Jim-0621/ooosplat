@@ -83,10 +83,21 @@ require_build_tools() {
 # couple of gigabytes each, so a container with many cores and modest RAM
 # gets cc1plus killed by the OOM killer. Cap the job count by memory too.
 build_jobs() {
-  local cores mem_gb by_mem
+  local cores mem_kb file value by_mem
   cores="$(nproc)"
-  mem_gb=$(( $(awk '/MemTotal/{print $2}' /proc/meminfo) / 1024 / 1024 ))
-  by_mem=$(( mem_gb / 2 ))
+  mem_kb="$(awk '/MemTotal/{print $2}' /proc/meminfo)"
+  # /proc/meminfo reports the host inside a container, so prefer a cgroup
+  # limit when one is set: that is the number the OOM killer enforces.
+  for file in /sys/fs/cgroup/memory.max \
+              /sys/fs/cgroup/memory/memory.limit_in_bytes; do
+    [ -r "$file" ] || continue
+    value="$(cat "$file")"
+    case "$value" in
+      ''|max|*[!0-9]*) continue ;;
+    esac
+    [ "$(( value / 1024 ))" -lt "$mem_kb" ] && mem_kb="$(( value / 1024 ))"
+  done
+  by_mem=$(( mem_kb / 1024 / 1024 / 2 ))
   [ "$by_mem" -lt 1 ] && by_mem=1
   if [ "$by_mem" -lt "$cores" ]; then echo "$by_mem"; else echo "$cores"; fi
 }
