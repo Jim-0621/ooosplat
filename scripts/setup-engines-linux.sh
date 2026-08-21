@@ -46,6 +46,7 @@ BRUSH_TAG="${BRUSH_TAG:-v0.3.0}"
 # Ubuntu 22.04 packages Ceres 2.0, which is older than COLMAP 4.x and GLOMAP
 # accept. Building it is cheap next to COLMAP itself.
 CERES_TAG="${CERES_TAG:-2.2.0}"
+CMAKE_TAG="${CMAKE_TAG:-v3.31.6}"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENGINES="$ROOT/engines"
@@ -270,10 +271,34 @@ setup_brush() {
   "$ENGINES/brush/brush_app" --help | head -3
 }
 
+setup_cmake() {
+  log "CMake ${CMAKE_TAG}"
+  # Ubuntu 22.04 ships 3.22 and GLOMAP's CMakeLists demands 3.28. Kitware's
+  # official tarball unpacks straight into /usr/local, which precedes /usr on
+  # the default PATH, so nothing else has to move.
+  local version="${CMAKE_TAG#v}"
+  local url="https://github.com/Kitware/CMake/releases/download/${CMAKE_TAG}/cmake-${version}-linux-x86_64.tar.gz"
+  local archive="$CACHE/$(basename "$url")"
+  mkdir -p "$CACHE"
+  [ -s "$archive" ] ||
+    { curl -fL --retry 3 -o "$archive.part" "$url" && mv "$archive.part" "$archive"; }
+  $SUDO tar -xzf "$archive" -C /usr/local --strip-components=1
+  hash -r
+  cmake --version | head -1
+}
+
 setup_glomap() {
   log "GLOMAP (optional mapper backend)"
   # GLOMAP links against the COLMAP libraries, so that has to exist first.
   [ -x "$ENGINES/colmap/bin/colmap" ] || die "build COLMAP first: $0 colmap"
+  # GLOMAP's CMakeLists sets cmake_minimum_required(3.28), which Ubuntu 22.04
+  # cannot satisfy. Say so here rather than letting CMake fail on line 1.
+  local have want
+  have="$(cmake --version | head -1 | awk '{print $3}')"
+  want=3.28.0
+  [ "$(printf '%s\n%s\n' "$have" "$want" | sort -V | head -1)" = "$want" ] ||
+    die "GLOMAP needs cmake >= $want, found $have; run '$0 cmake' first"
+
 
   local src="$CACHE/glomap"
   # Unpinned by default: pin GLOMAP_TAG once a revision is known good on your
@@ -310,12 +335,13 @@ main() {
   preflight
   for target in "${targets[@]}"; do
     case "$target" in
+      cmake)  setup_cmake  ;;
       ffmpeg) setup_ffmpeg ;;
       ceres)  setup_ceres  ;;
       colmap) setup_colmap ;;
       brush)  setup_brush  ;;
       glomap) setup_glomap ;;
-      *) die "unknown component: $target (expected ffmpeg, ceres, colmap, brush or glomap)" ;;
+      *) die "unknown component: $target (expected cmake, ffmpeg, ceres, colmap, brush or glomap)" ;;
     esac
   done
   record_hashes
