@@ -289,9 +289,11 @@ setup_cmake() {
 
 setup_glomap() {
   log "GLOMAP (optional mapper backend)"
-  # No COLMAP precondition: GLOMAP's CMakeLists pulls its own COLMAP through
-  # FetchContent and builds it inside the GLOMAP tree, ignoring an installed
-  # one. That is most of the twenty minutes its configure step takes.
+  # FETCH_COLMAP=OFF below links the COLMAP installed by setup_colmap, so this
+  # has to exist first. Leaving it ON builds a second COLMAP inside the GLOMAP
+  # tree whose database schema need not match the one that wrote the database,
+  # which surfaces as "SQLite error: SQL logic error" when the mapper starts.
+  [ -x "$ENGINES/colmap/bin/colmap" ] || die "build COLMAP first: $0 colmap"
   # GLOMAP's CMakeLists sets cmake_minimum_required(3.28), which Ubuntu 22.04
   # cannot satisfy. Say so here rather than letting CMake fail on line 1.
   local have want
@@ -308,6 +310,7 @@ setup_glomap() {
 
   cmake -S "$src" -B "$src/build" -GNinja \
     -DCMAKE_BUILD_TYPE=Release \
+    -DFETCH_COLMAP=OFF \
     -DCMAKE_PREFIX_PATH="$ENGINES/colmap" \
     -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCH:-native}" \
     -DCMAKE_INSTALL_PREFIX="$ENGINES/glomap"
