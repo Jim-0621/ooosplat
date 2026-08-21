@@ -217,6 +217,10 @@ setup_colmap() {
   # ONNX_ENABLED=OFF skips a several-hundred-megabyte ONNX Runtime download at
   # configure time. It only backs the learned feature extractors; this pipeline
   # runs SIFT, and the bundled build is compiled against CUDA 12 anyway.
+  #
+  # Configure still needs GitHub reachable: PoseLib comes in through
+  # FetchContent. That download is small, so run this step with whatever
+  # accelerator the host offers even though apt wants it switched off.
 
   # CMAKE_CUDA_ARCHITECTURES=native compiles only for the GPU in this machine,
   # which keeps the build short. Use "all-major" instead if the binary has to
