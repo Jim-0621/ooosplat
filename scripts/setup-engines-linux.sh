@@ -18,6 +18,7 @@
 #   ./scripts/setup-engines-linux.sh colmap     # one component
 #   ./scripts/setup-engines-linux.sh glomap     # optional mapper backend
 #   SKIP_APT=1 ./scripts/setup-engines-linux.sh # no package installs
+#   FFMPEG_URL=... ./scripts/setup-engines-linux.sh ffmpeg  # other static build
 #   CLEAN=1   ./scripts/setup-engines-linux.sh  # discard cached CMake trees
 #   BUILD_JOBS=4 ./scripts/setup-engines-linux.sh  # cap compiler parallelism
 #
@@ -158,13 +159,20 @@ preflight() {
 setup_ffmpeg() {
   log "FFmpeg / FFprobe"
   mkdir -p "$ENGINES/ffmpeg"
-  # The distribution build is enough here: the pipeline only calls ffmpeg for
-  # uniform frame extraction and parses "frame=N" from -progress, which has
-  # been stable for many releases. Swap in a pinned build if you ever need
-  # byte-identical output across machines.
-  command -v ffmpeg >/dev/null || apt_install ffmpeg
-  ln -sf "$(command -v ffmpeg)"  "$ENGINES/ffmpeg/ffmpeg"
-  ln -sf "$(command -v ffprobe)" "$ENGINES/ffmpeg/ffprobe"
+  # Not the distribution package: probe_video asks for the stream_side_data
+  # section, which ffprobe only grew after 4.4, so Ubuntu 22.04's build exits
+  # with "No match for section" on every video. A static build also keeps the
+  # engine at the same major version as the Windows bundle.
+  local url="${FFMPEG_URL:-https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n7.1-latest-linux64-gpl-7.1.tar.xz}"
+  local archive="$CACHE/$(basename "$url")"
+  mkdir -p "$CACHE"
+  [ -s "$archive" ] || curl -fL --retry 3 -o "$archive" "$url"
+  local unpacked="$CACHE/ffmpeg-static"
+  rm -rf "$unpacked"
+  mkdir -p "$unpacked"
+  tar -xJf "$archive" -C "$unpacked" --strip-components=1
+  install -m 755 "$unpacked/bin/ffmpeg"  "$ENGINES/ffmpeg/ffmpeg"
+  install -m 755 "$unpacked/bin/ffprobe" "$ENGINES/ffmpeg/ffprobe"
   "$ENGINES/ffmpeg/ffmpeg" -version | head -1
 }
 
