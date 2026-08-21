@@ -124,8 +124,11 @@ async fn execute(cli: Cli) -> Result<()> {
         } => {
             let runner = PipelineRunner::new(engines, |event| {
                 eprintln!(
-                    "{:>6.2}% {:?}: {}",
-                    event.progress, event.stage, event.message
+                    "[{}] {:>6.2}% {:?}: {}",
+                    clock(event.elapsed_ms),
+                    event.progress,
+                    event.stage,
+                    event.message
                 );
             })
             .with_compute_policy(compute)
@@ -155,4 +158,11 @@ fn ensure_engine(path: &std::path::Path) -> Result<()> {
     } else {
         Err(SplatError::EngineMissing(path.display().to_string()))
     }
+}
+
+/// Wall clock since the run started, so the stage boundaries in the progress
+/// stream can be read off directly instead of subtracting log file mtimes.
+fn clock(elapsed_ms: u64) -> String {
+    let total = elapsed_ms / 1000;
+    format!("{:02}:{:02}:{:02}", total / 3600, (total / 60) % 60, total % 60)
 }
