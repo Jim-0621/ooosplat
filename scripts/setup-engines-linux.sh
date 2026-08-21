@@ -289,8 +289,9 @@ setup_cmake() {
 
 setup_glomap() {
   log "GLOMAP (optional mapper backend)"
-  # GLOMAP links against the COLMAP libraries, so that has to exist first.
-  [ -x "$ENGINES/colmap/bin/colmap" ] || die "build COLMAP first: $0 colmap"
+  # No COLMAP precondition: GLOMAP's CMakeLists pulls its own COLMAP through
+  # FetchContent and builds it inside the GLOMAP tree, ignoring an installed
+  # one. That is most of the twenty minutes its configure step takes.
   # GLOMAP's CMakeLists sets cmake_minimum_required(3.28), which Ubuntu 22.04
   # cannot satisfy. Say so here rather than letting CMake fail on line 1.
   local have want
@@ -299,11 +300,10 @@ setup_glomap() {
   [ "$(printf '%s\n%s\n' "$have" "$want" | sort -V | head -1)" = "$want" ] ||
     die "GLOMAP needs cmake >= $want, found $have; run '$0 cmake' first"
 
-
   local src="$CACHE/glomap"
-  # Unpinned by default: pin GLOMAP_TAG once a revision is known good on your
-  # footage, the same way COLMAP_TAG and BRUSH_TAG are pinned above.
-  sync_source "$src" https://github.com/colmap/glomap.git "${GLOMAP_TAG:-}"
+  # Pinned to the revision this port was validated against. GLOMAP publishes
+  # no releases, so the alternative is whatever main happens to hold.
+  sync_source "$src" https://github.com/colmap/glomap.git "${GLOMAP_TAG:-99806d0}"
   [ "${CLEAN:-0}" = "1" ] && rm -rf "$src/build"
 
   cmake -S "$src" -B "$src/build" -GNinja \
