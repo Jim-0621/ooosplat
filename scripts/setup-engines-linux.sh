@@ -294,6 +294,10 @@ setup_glomap() {
   # tree whose database schema need not match the one that wrote the database,
   # which surfaces as "SQLite error: SQL logic error" when the mapper starts.
   [ -x "$ENGINES/colmap/bin/colmap" ] || die "build COLMAP first: $0 colmap"
+  # CMAKE_FIND_PACKAGE_TARGETS_GLOBAL goes with it: GLOMAP calls
+  # find_package(COLMAP) from thirdparty/, and an imported target is scoped to
+  # the directory that created it, so glomap/ -- a sibling -- cannot see
+  # colmap::colmap. FetchContent hides this because it makes real targets.
   # GLOMAP's CMakeLists sets cmake_minimum_required(3.28), which Ubuntu 22.04
   # cannot satisfy. Say so here rather than letting CMake fail on line 1.
   local have want
@@ -311,6 +315,7 @@ setup_glomap() {
   cmake -S "$src" -B "$src/build" -GNinja \
     -DCMAKE_BUILD_TYPE=Release \
     -DFETCH_COLMAP=OFF \
+    -DCMAKE_FIND_PACKAGE_TARGETS_GLOBAL=ON \
     -DCMAKE_PREFIX_PATH="$ENGINES/colmap" \
     -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCH:-native}" \
     -DCMAKE_INSTALL_PREFIX="$ENGINES/glomap"
