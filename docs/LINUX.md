@@ -48,7 +48,14 @@ git checkout linux-port
 cargo build --release --bin splatstudio --no-default-features --manifest-path src-tauri/Cargo.toml
 ```
 
-自检四个引擎：
+`EnginePaths::discover` 按**当前工作目录**找 `./engines`，所以从仓库以外的目录调用时要
+指明引擎位置，否则五个引擎会一起报「未找到」：
+
+```bash
+export OOOSPLAT_ENGINE_DIR=/root/ooosplat/engines
+```
+
+自检引擎（CLI 会额外报告可选的 GLOMAP，共五项）：
 
 ```bash
 ./src-tauri/target/release/splatstudio health
